@@ -11,7 +11,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -35,8 +34,12 @@ public class ProductServiceCodeCacheRepository {
     private final RedisTemplate<String, Object> redisTemplate;
 
     public void saveAll(List<ProductServiceCodeResponse> codes) {
-        Map<String, ProductServiceCodeResponse> codesMap = codes.stream()
-                .collect(Collectors.toMap(code -> code.getId().toString(), Function.identity()));
+        var codesMap = codes.stream().collect(Collectors.toMap(code -> code.getId().toString(), Function.identity()));
+
+        var idsByCategory = codes.stream()
+                .collect(Collectors.groupingBy(
+                        ProductServiceCodeResponse::getType,
+                        Collectors.mapping(code -> code.getId().toString(), Collectors.toList())));
 
         redisTemplate.execute(new SessionCallback<List<Object>>() {
             @Override
@@ -49,11 +52,6 @@ public class ProductServiceCodeCacheRepository {
                 String[] allIds = codes.stream().map(c -> c.getId().toString()).toArray(String[]::new);
                 operations.opsForSet().add(INDEX_ALL_KEY, allIds);
                 operations.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
-
-                Map<ClassificationType, List<String>> idsByCategory = codes.stream()
-                        .collect(Collectors.groupingBy(
-                                ProductServiceCodeResponse::getType,
-                                Collectors.mapping(code -> code.getId().toString(), Collectors.toList())));
 
                 idsByCategory.forEach((type, ids) -> {
                     String indexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
