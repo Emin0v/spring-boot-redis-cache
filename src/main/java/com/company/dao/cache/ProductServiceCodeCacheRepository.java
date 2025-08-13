@@ -19,7 +19,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.stereotype.Repository;
 import org.springframework.util.CollectionUtils;
 
@@ -35,32 +38,54 @@ public class ProductServiceCodeCacheRepository {
         Map<String, ProductServiceCodeResponse> codesMap = codes.stream()
                 .collect(Collectors.toMap(code -> code.getId().toString(), Function.identity()));
 
-        redisTemplate.opsForHash().putAll(HASH_KEY, codesMap);
-        redisTemplate.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
+        redisTemplate.execute(new SessionCallback<List<Object>>() {
+            @Override
+            public List<Object> execute(RedisOperations operations) throws DataAccessException {
+                operations.multi();
 
-        String[] allIds = codes.stream().map(c -> c.getId().toString()).toArray(String[]::new);
-        redisTemplate.opsForSet().add(INDEX_ALL_KEY, allIds);
-        redisTemplate.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
+                operations.opsForHash().putAll(HASH_KEY, codesMap);
+                operations.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
 
-        Map<ClassificationType, List<String>> idsByCategory = codes.stream()
-                .collect(Collectors.groupingBy(
-                        ProductServiceCodeResponse::getType,
-                        Collectors.mapping(code -> code.getId().toString(), Collectors.toList())
-                ));
+                String[] allIds = codes.stream().map(c -> c.getId().toString()).toArray(String[]::new);
+                operations.opsForSet().add(INDEX_ALL_KEY, allIds);
+                operations.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
 
-        idsByCategory.forEach((type, ids) -> {
-            String indexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
-            redisTemplate.opsForSet().add(indexKey, ids.toArray(new String[0]));
-            redisTemplate.expire(indexKey, TTL_DAYS, TimeUnit.DAYS);
+                Map<ClassificationType, List<String>> idsByCategory = codes.stream()
+                        .collect(Collectors.groupingBy(
+                                ProductServiceCodeResponse::getType,
+                                Collectors.mapping(code -> code.getId().toString(), Collectors.toList())));
+
+                idsByCategory.forEach((type, ids) -> {
+                    String indexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
+                    operations.opsForSet().add(indexKey, ids.toArray(new String[0]));
+                    operations.expire(indexKey, TTL_DAYS, TimeUnit.DAYS);
+                });
+
+                return operations.exec();
+            }
         });
     }
 
     public void saveOne(ProductServiceCodeResponse code) {
         String idStr = code.getId().toString();
-        redisTemplate.opsForHash().put(HASH_KEY, idStr, code);
+        String categoryIndexKey = INDEX_CATEGORY_PREFIX.concat(code.getType().name());
 
-        redisTemplate.opsForSet().add(INDEX_ALL_KEY, idStr);
-        redisTemplate.opsForSet().add(INDEX_CATEGORY_PREFIX.concat(code.getType().name()), idStr);
+        redisTemplate.execute(new SessionCallback<List<Object>>() {
+            @Override
+            public List<Object> execute(RedisOperations operations) throws DataAccessException {
+                operations.multi();
+
+                operations.opsForHash().put(HASH_KEY, idStr, code);
+                operations.opsForSet().add(INDEX_ALL_KEY, idStr);
+                operations.opsForSet().add(categoryIndexKey, idStr);
+
+                operations.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
+                operations.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
+                operations.expire(categoryIndexKey, TTL_DAYS, TimeUnit.DAYS);
+
+                return operations.exec();
+            }
+        });
     }
 
     public List<ProductServiceCodeResponse> findAll() {
