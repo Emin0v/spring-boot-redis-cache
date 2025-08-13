@@ -1,0 +1,10 @@
+databaseChangeLog:
+  - changeSet:
+      id: 019_load_data_product_service_code_table
+      author: Mahammad Eminov
+      changes:
+        - loadData:
+            encoding: UTF-8
+            file: liquibase/data/product-service-code.csv
+            separator: ;
+            tableName: product_service_code
