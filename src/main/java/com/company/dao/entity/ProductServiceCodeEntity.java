@@ -46,5 +46,3 @@ public class ProductServiceCodeEntity {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 }
-
-
