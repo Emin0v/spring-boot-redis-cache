@@ -9,11 +9,13 @@ import com.company.model.dto.response.ProductServiceCodeResponse;
 import com.company.model.enums.ClassificationType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,7 +33,7 @@ public class ProductServiceCodeCacheRepository {
 
     public void saveAll(List<ProductServiceCodeResponse> codes) {
         Map<String, ProductServiceCodeResponse> codesMap = codes.stream()
-                .collect(Collectors.toMap(code -> code.getId().toString(), code -> code));
+                .collect(Collectors.toMap(code -> code.getId().toString(), Function.identity()));
 
         redisTemplate.opsForHash().putAll(HASH_KEY, codesMap);
         redisTemplate.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
@@ -64,7 +66,7 @@ public class ProductServiceCodeCacheRepository {
     public List<ProductServiceCodeResponse> findAll() {
         Set<Object> allIds = redisTemplate.opsForSet().members(INDEX_ALL_KEY);
         if (CollectionUtils.isEmpty(allIds)) {
-            return null;
+            return Collections.emptyList();
         }
         return fetchFromHash(allIds);
     }
@@ -73,7 +75,7 @@ public class ProductServiceCodeCacheRepository {
         String indexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
         Set<Object> ids = redisTemplate.opsForSet().members(indexKey);
         if (CollectionUtils.isEmpty(ids)) {
-            return null;
+            return Collections.emptyList();
         }
         return fetchFromHash(ids);
     }

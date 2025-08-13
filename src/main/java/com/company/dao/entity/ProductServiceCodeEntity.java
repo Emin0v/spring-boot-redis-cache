@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.validation.constraints.NotNull;
 import java.time.LocalDateTime;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -27,10 +28,13 @@ public class ProductServiceCodeEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "code", nullable = false, unique = true)
     private String code;
 
+    @Column(name = "name", nullable = false)
     private String name;
 
+    @NotNull
     @Enumerated(EnumType.STRING)
     private ClassificationType type;
 
