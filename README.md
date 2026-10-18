@@ -1,5 +1,7 @@
 # Spring Boot & Redis Cache Service
 
+[![CI](https://github.com/Emin0v/spring-boot-redis-cache/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Emin0v/spring-boot-redis-cache/actions/workflows/ci.yml)
+
 This Spring Boot example explores application-managed Redis caching for product and service codes.
 
 ## Overview
