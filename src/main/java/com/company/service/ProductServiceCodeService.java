@@ -53,7 +53,7 @@ public class ProductServiceCodeService {
                 .toList();
 
         if (!CollectionUtils.isEmpty(dbList)) {
-            dbList.forEach(cacheRepository::saveOne);
+            cacheRepository.saveByType(type, dbList);
         }
 
         return dbList;
@@ -67,7 +67,7 @@ public class ProductServiceCodeService {
 
         var savedEntity = productServiceCodeRepository.save(productServiceCodeMapper.toEntity(request));
         var response = productServiceCodeMapper.toResponse(savedEntity);
-        cacheRepository.saveOne(response);
+        cacheRepository.invalidate();
 
         return response;
     }
@@ -81,7 +81,7 @@ public class ProductServiceCodeService {
         var savedEntity = productServiceCodeRepository.save(entity);
 
         var response = productServiceCodeMapper.toResponse(savedEntity);
-        cacheRepository.saveOne(response);
+        cacheRepository.invalidate();
 
         return response;
     }

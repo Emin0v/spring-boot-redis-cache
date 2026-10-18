@@ -8,6 +8,8 @@ import static com.company.model.constant.RedisCacheKeyConstants.TTL_DAYS;
 import com.company.model.dto.response.ProductServiceCodeResponse;
 import com.company.model.enums.ClassificationType;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -46,16 +48,20 @@ public class ProductServiceCodeCacheRepository {
             public List<Object> execute(RedisOperations operations) throws DataAccessException {
                 operations.multi();
 
+                operations.delete(cacheKeys());
+                if (codes.isEmpty()) {
+                    return operations.exec();
+                }
                 operations.opsForHash().putAll(HASH_KEY, codesMap);
                 operations.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
 
-                String[] allIds = codes.stream().map(c -> c.getId().toString()).toArray(String[]::new);
+                Object[] allIds = codes.stream().map(c -> c.getId().toString()).toArray();
                 operations.opsForSet().add(INDEX_ALL_KEY, allIds);
                 operations.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
 
                 idsByCategory.forEach((type, ids) -> {
                     String indexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
-                    operations.opsForSet().add(indexKey, ids.toArray(new String[0]));
+                    operations.opsForSet().add(indexKey, ids.toArray());
                     operations.expire(indexKey, TTL_DAYS, TimeUnit.DAYS);
                 });
 
@@ -64,26 +70,31 @@ public class ProductServiceCodeCacheRepository {
         });
     }
 
-    public void saveOne(ProductServiceCodeResponse code) {
-        String idStr = code.getId().toString();
-        String categoryIndexKey = INDEX_CATEGORY_PREFIX.concat(code.getType().name());
+    public void saveByType(ClassificationType type, List<ProductServiceCodeResponse> codes) {
+        String categoryIndexKey = INDEX_CATEGORY_PREFIX.concat(type.name());
+        var codesMap = codes.stream().collect(Collectors.toMap(code -> code.getId().toString(), Function.identity()));
 
         redisTemplate.execute(new SessionCallback<List<Object>>() {
             @Override
             public List<Object> execute(RedisOperations operations) throws DataAccessException {
                 operations.multi();
 
-                operations.opsForHash().put(HASH_KEY, idStr, code);
-                operations.opsForSet().add(INDEX_ALL_KEY, idStr);
-                operations.opsForSet().add(categoryIndexKey, idStr);
-
+                operations.delete(categoryIndexKey);
+                if (codes.isEmpty()) {
+                    return operations.exec();
+                }
+                operations.opsForHash().putAll(HASH_KEY, codesMap);
+                operations.opsForSet().add(categoryIndexKey, codesMap.keySet().toArray());
                 operations.expire(HASH_KEY, TTL_DAYS, TimeUnit.DAYS);
-                operations.expire(INDEX_ALL_KEY, TTL_DAYS, TimeUnit.DAYS);
                 operations.expire(categoryIndexKey, TTL_DAYS, TimeUnit.DAYS);
 
                 return operations.exec();
             }
         });
+    }
+
+    public void invalidate() {
+        redisTemplate.delete(cacheKeys());
     }
 
     public List<ProductServiceCodeResponse> findAll() {
@@ -105,10 +116,20 @@ public class ProductServiceCodeCacheRepository {
 
     private List<ProductServiceCodeResponse> fetchFromHash(Collection<Object> ids) {
         List<Object> hashValues = redisTemplate.opsForHash().multiGet(HASH_KEY, ids);
+        if (hashValues == null || hashValues.size() != ids.size() || hashValues.stream().anyMatch(Objects::isNull)) {
+            return Collections.emptyList();
+        }
 
         return hashValues.stream()
-                .filter(Objects::nonNull)
                 .map(v -> objectMapper.convertValue(v, ProductServiceCodeResponse.class))
                 .toList();
+    }
+
+    private List<String> cacheKeys() {
+        List<String> keys = new ArrayList<>(List.of(HASH_KEY, INDEX_ALL_KEY));
+        Arrays.stream(ClassificationType.values())
+                .map(type -> INDEX_CATEGORY_PREFIX + type.name())
+                .forEach(keys::add);
+        return keys;
     }
 }
