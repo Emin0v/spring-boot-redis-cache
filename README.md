@@ -4,13 +4,15 @@ This Spring Boot example explores application-managed Redis caching for product 
 
 ## Overview
 
-The service manages `ProductServiceCode` entities, providing RESTful endpoints to create, update, and retrieve these codes. It leverages a read-through/write-through caching mechanism with Redis to minimize database load and improve response times for frequent read operations.
+The service manages `ProductServiceCode` entities through REST endpoints. It uses cache-aside
+reads and invalidates cached catalogue/category snapshots after database writes. PostgreSQL
+remains the source of truth.
 
 ## Prerequisites
 
 - Java 21
 - Docker and Docker Compose
-- Gradle 8.8
+- The included Gradle wrapper
 
 ## Getting Started
 
@@ -19,7 +21,7 @@ The service manages `ProductServiceCode` entities, providing RESTful endpoints t
 The required infrastructure (PostgreSQL and Redis) is managed via Docker Compose.
 
 ```bash
-docker-compose -f infra/docker-compose.yaml up -d
+docker compose -f infra/docker-compose.yaml up -d
 ```
 
 This command will start a PostgreSQL database and a Redis instance in the background.
@@ -49,31 +51,34 @@ The following endpoints are available under the base path `/api/v1/codes`:
 
 ## Caching Strategy
 
-The application uses Redis hashes and sets to cache database results. Its current implementation
-has the correctness limitations described below; performance and consistency guarantees have
-not been established by automated tests.
+The application uses Redis hashes and sets to cache complete results for a queried scope.
+Full-catalogue and category reads populate their own indexes; a category result cannot mark
+the entire catalogue as cached.
 
 ### Cache Logic Flow
 
 1.  **Read Operations (`findAll`, `findByType`):**
     - The application first requests data from the Redis cache.
-    - **Cache Hit:** If the data exists in Redis, it is returned directly to the client.
-    - **Cache Miss:** If the data is not in Redis, the application queries the PostgreSQL database. The retrieved data is then saved to the Redis cache for future requests before being returned to the client.
+    - **Cache Hit:** Return the result only when every indexed ID has a corresponding cached object.
+    - **Cache Miss:** Query PostgreSQL for the requested scope and populate that scope's cache.
+      Replacing a full-catalogue snapshot also replaces its category indexes.
 
 2.  **Write Operations (`createCode`, `updateCode`):**
     - The application writes the data to the PostgreSQL database first.
-    - After a database write, the application updates Redis separately. The database and Redis
-      do not participate in a shared transaction, so a Redis failure can occur after the database write succeeds.
+    - After the database write, invalidate the shared hash and all catalogue/category indexes.
+      The next read reloads its scope from PostgreSQL. This avoids treating one written row as
+      a complete catalogue and removes old membership after classification changes.
 
-### Current correctness limitations
+### Consistency boundaries
 
-- A single cached write can populate only part of the all-codes index. `findAll` currently
-  treats any nonempty cached result as complete, so other database rows can be omitted.
-- Updating a code's classification adds its ID to the new category index without removing
-  its old membership. A lookup by the old classification can return the updated object.
-- Concurrent cache population, cache eviction, and partial failures are not covered by
-  regression or integration tests yet. These cases need verification before relying on this
-  example for a complete catalogue or consistent category results.
+- Database writes and Redis invalidation are separate operations. Redis failure can follow a
+  committed database write, leaving stale cache data and an error response.
+- A read already in flight can repopulate an older snapshot after invalidation. This example
+  does not serialize database reads with cache writes or promise linearizable consistency.
+- Direct database changes bypass application invalidation. Empty results are not cached.
+- Invalidating the whole small catalogue favors simpler correctness over fine-grained cache
+  maintenance. Higher write rates would require measuring that cost and choosing a stronger
+  invalidation/versioning policy where needed.
 
 ### Redis Data Model
 
@@ -85,7 +90,7 @@ To support efficient lookups, the cache is structured using multiple Redis data 
 
 -   **`SETs` for Indexing:**
     -   **Key:** `dict:index:all`
-    -   **Description:** This Set stores the IDs of every code in the system. It is used to efficiently fetch all codes without needing to scan the main hash.
+    -   **Description:** IDs from a full-catalogue load. Category-only loads do not populate this key.
     -   ---
     -   **Key:** `dict:index:category:<TYPE>` (e.g., `dict:index:category:PRODUCT`)
     -   **Description:** A separate Set is maintained for each `ClassificationType`. Each set stores the IDs of all codes belonging to that category. This allows for fast retrieval of all codes of a specific type.
@@ -94,7 +99,8 @@ To support efficient lookups, the cache is structured using multiple Redis data 
 
 - Cache write operations set or refresh a **30-day TTL** on the shared hash and the index keys
   they touch. Reads do not refresh expiration. The TTL applies to whole keys rather than
-  individual codes, and independently expiring indexes can become incomplete.
+  individual codes. If an index references an expired/missing object, the read falls back
+  to the database rather than returning a partial result.
 
 ---
 
@@ -106,11 +112,15 @@ Database schema changes are managed by [Liquibase](https://www.liquibase.org/). 
 
 ## Running Tests
 
-The Gradle test task is available:
+With Docker running, execute:
 
 ```bash
-./gradlew test
+./gradlew check
 ```
 
-No automated test sources are currently committed. Running this task alone does not verify
-the caching behavior described above.
+Five Testcontainers regression tests use an isolated Redis 7 container and the application's
+Redis serializers and cache implementation. They cover category-first reads, writes with a
+cold cache, classification changes, missing hash entries, and replacement of a full snapshot.
+All five fail against the previous implementation and pass with the fixes. The database
+repository is mocked; these tests do not establish PostgreSQL transaction behavior or the
+concurrency guarantees discussed above. CI runs the same command.
