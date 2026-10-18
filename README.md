@@ -1,6 +1,6 @@
 # Spring Boot & Redis Cache Service
 
-This project is a Spring Boot application that demonstrates a robust caching strategy using Redis to optimize data retrieval for product and service codes.
+This Spring Boot example explores application-managed Redis caching for product and service codes.
 
 ## Overview
 
@@ -49,7 +49,9 @@ The following endpoints are available under the base path `/api/v1/codes`:
 
 ## Caching Strategy
 
-The application implements a sophisticated read-through/write-through caching model to ensure high performance and data consistency.
+The application uses Redis hashes and sets to cache database results. Its current implementation
+has the correctness limitations described below; performance and consistency guarantees have
+not been established by automated tests.
 
 ### Cache Logic Flow
 
@@ -60,7 +62,18 @@ The application implements a sophisticated read-through/write-through caching mo
 
 2.  **Write Operations (`createCode`, `updateCode`):**
     - The application writes the data to the PostgreSQL database first.
-    - Upon a successful database write, the application immediately writes the same data to the Redis cache. This ensures that the cache remains synchronized with the database.
+    - After a database write, the application updates Redis separately. The database and Redis
+      do not participate in a shared transaction, so a Redis failure can occur after the database write succeeds.
+
+### Current correctness limitations
+
+- A single cached write can populate only part of the all-codes index. `findAll` currently
+  treats any nonempty cached result as complete, so other database rows can be omitted.
+- Updating a code's classification adds its ID to the new category index without removing
+  its old membership. A lookup by the old classification can return the updated object.
+- Concurrent cache population, cache eviction, and partial failures are not covered by
+  regression or integration tests yet. These cases need verification before relying on this
+  example for a complete catalogue or consistent category results.
 
 ### Redis Data Model
 
@@ -79,7 +92,9 @@ To support efficient lookups, the cache is structured using multiple Redis data 
 
 ### Time-to-Live (TTL)
 
-- All cache keys are configured with a **30-day TTL**. This policy ensures that if the data is not accessed or updated for 30 days, it is automatically evicted from the cache, freeing up memory and preventing excessively stale data.
+- Cache write operations set or refresh a **30-day TTL** on the shared hash and the index keys
+  they touch. Reads do not refresh expiration. The TTL applies to whole keys rather than
+  individual codes, and independently expiring indexes can become incomplete.
 
 ---
 
@@ -91,8 +106,11 @@ Database schema changes are managed by [Liquibase](https://www.liquibase.org/). 
 
 ## Running Tests
 
-To run the test suite, use the following Gradle command:
+The Gradle test task is available:
 
 ```bash
 ./gradlew test
 ```
+
+No automated test sources are currently committed. Running this task alone does not verify
+the caching behavior described above.
